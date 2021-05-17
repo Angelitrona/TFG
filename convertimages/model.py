@@ -210,13 +210,12 @@ def fit(epochs, lr, model, train_loader, val_loader, opt_func=torch.optim.SGD):
     
 device = get_default_device()
 print("We are using ", device)
-"""
 if (device != "cpu"):
 	train_dl = DeviceDataLoader(train_dl, device) # podemos poner shuffle = True
 	#val_dl = DeviceDataLoader(val_dl, device)
 	to_device(model, device);
 	print("We move dataloader and the model to ", device)
-"""
+
 num_epochs = 2
 lr = 0.001
 opt_func = torch.optim.Adam
