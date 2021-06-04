@@ -9,17 +9,21 @@ from torchvision.datasets import MNIST
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
+# from sklearn.externals import joblib
+# import sklearn.external.joblib as extjoblib
+import joblib #save the models
+
 #Load the data
 mnist = MNIST(root='data', 
               train=True, 
               download=True,
               transform=Compose([ToTensor(), Normalize(mean=(0.5,), std=(0.5,))]))
-              
+
+           
 img, label = mnist[0]
 print('Label: ', label)
 print(img[:,10:15,10:15])
 torch.min(img), torch.max(img)
-
 
 #Create a dataloader
 batch_size = 100
@@ -32,6 +36,7 @@ for img_batch, label_batch in data_loader:
     print(label_batch)
     break
 
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def denorm(x):
@@ -39,6 +44,8 @@ def denorm(x):
     return out.clamp(0, 1)
 
 # DISCRIMINATOR
+
+#MNIST
 image_size = 784
 hidden_size = 256
 
@@ -51,6 +58,7 @@ D = nn.Sequential(
     nn.Sigmoid())
     
 D.to(device);
+ 
 
 
 # GENERATOR
@@ -64,6 +72,7 @@ G = nn.Sequential(
     nn.Linear(hidden_size, image_size),
     nn.Tanh())
 
+# Show img
 y = G(torch.randn(2, latent_size))
 gen_imgs = denorm(y.reshape((-1, 28,28)).detach())
 
@@ -131,7 +140,8 @@ def train_generator():
     
 # TRAINING THE MODEL
 
-sample_dir = 'samples'
+# Before training we are going to save some images
+sample_dir = 'samples_MNIST'
 if not os.path.exists(sample_dir):
     os.makedirs(sample_dir)
         
@@ -153,12 +163,11 @@ def save_fake_images(index):
     print('Saving', fake_fname)
     save_image(denorm(fake_images), os.path.join(sample_dir, fake_fname), nrow=10)
     
-# Before training
-save_fake_images(0)
+#save_fake_images(0)
 Image(os.path.join(sample_dir, 'fake_images-0000.png'))
 
 
-
+# Training
 num_epochs = 300
 total_step = len(data_loader)
 d_losses, g_losses, real_scores, fake_scores = [], [], [], []
@@ -189,7 +198,10 @@ for epoch in range(num_epochs):
 torch.save(G.state_dict(), 'G.ckpt')
 torch.save(D.state_dict(), 'D.ckpt')
 
-# 
+# Save the model
+joblib.dump(G, 'G_train.pkl') 
+joblib.dump(D, 'D_train.pkl') 
+'''
 Image('./samples/fake_images-0010.png')
 Image('./samples/fake_images-0050.png')
 Image('./samples/fake_images-0300.png')
@@ -226,3 +238,12 @@ plt.xlabel('epoch')
 plt.ylabel('score')
 plt.legend(['Real Score', 'Fake score'])
 plt.title('Scores');
+'''
+
+
+
+
+
+
+
+
