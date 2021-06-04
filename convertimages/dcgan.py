@@ -101,7 +101,7 @@ tgt_dataloader = torch.utils.data.DataLoader(tgt_dataset, batch_size=batch_size,
 # Decide which device we want to run on
 device = torch.device("cuda" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
 #print("Device: ",device)
- 
+  
 # Plot some training images
 real_batch = next(iter(src_dataloader))
 plt.figure(figsize=(8,8))
