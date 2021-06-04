@@ -15,19 +15,24 @@ import torchvision.utils as vutils
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+from torchvision.utils import save_image
 from IPython.display import HTML
 from generator import Generator
 from discriminator import Discriminator
+from noise import noise_gauss
+
+import joblib #save the models
 
 # Set random seed for reproducibility
 manualSeed = 999
 #manualSeed = random.randint(1, 10000) # use if you want new results
-print("Random Seed: ", manualSeed)
+#print("Random Seed: ", manualSeed)
 random.seed(manualSeed)
 torch.manual_seed(manualSeed)
 
 # Root directory for dataset
-dataroot = "./prueba"
+srcroot = "./prueba"
+#tgtroot = './tgt'
 
 # Number of workers for dataloader
 workers = 2
@@ -65,24 +70,40 @@ ngpu = 1
 
 
 
-# Create the dataset. We use an image folder
-dataset = dset.ImageFolder(root=dataroot,
+# Create the source dataset. We use an image folder
+src_dataset = dset.ImageFolder(root=srcroot,
                            transform=transforms.Compose([
                                transforms.Resize(image_size),
                                transforms.CenterCrop(image_size),
                                transforms.ToTensor(),
                                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                            ]))
-# Create the dataloader
-dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
+# Create the source dataloader
+src_dataloader = torch.utils.data.DataLoader(src_dataset, batch_size=batch_size,
                                          shuffle=True, num_workers=workers)
+  
+  
+'''                                       
+# Create the target dataset. We use an image folder
+tgt_dataset = dset.ImageFolder(root=tgtroot,
+                           transform=transforms.Compose([
+                               transforms.Resize(image_size),
+                               transforms.CenterCrop(image_size),
+                               transforms.ToTensor(),
+                               transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                           ]))
+# Create the target dataloader
+tgt_dataloader = torch.utils.data.DataLoader(tgt_dataset, batch_size=batch_size,
+                                         shuffle=True, num_workers=workers)
+'''                                        
+                                         
 
 # Decide which device we want to run on
-device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
-print("Device: ",device)
-
+device = torch.device("cuda" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
+#print("Device: ",device)
+  
 # Plot some training images
-real_batch = next(iter(dataloader))
+real_batch = next(iter(src_dataloader))
 plt.figure(figsize=(8,8))
 plt.axis("off")
 plt.title("Training Images")
@@ -107,7 +128,7 @@ def weights_init(m):
         nn.init.constant_(m.bias.data, 0)
 
 # GENERATOR
-netG = Generator(ngpu).to(device)
+netG = Generator(ngpu,nc).to(device)
 
 # Handle multi-gpu if desired
 if (device.type == 'cuda') and (ngpu > 1):
@@ -118,10 +139,10 @@ if (device.type == 'cuda') and (ngpu > 1):
 netG.apply(weights_init)
 
 # Print the model
-print(netG)
+#print(netG)
 
 # DISCRIMINATOR
-netD = Discriminator(ngpu).to(device)
+netD = Discriminator(ngpu,nc).to(device)
 
 # Handle multi-gpu if desired
 if (device.type == 'cuda') and (ngpu > 1):
@@ -132,7 +153,7 @@ if (device.type == 'cuda') and (ngpu > 1):
 netD.apply(weights_init)
 
 # Print the model
-print(netD)
+#print(netD)
 
 
 # Initialize BCELoss function
@@ -152,6 +173,24 @@ optimizerG = optim.Adam(netG.parameters(), lr=lr, betas=(beta1, 0.999))
 
 
 #TRAINING
+# Save image function
+sample_dir = 'images_dcgan'
+if not os.path.exists(sample_dir):
+    os.makedirs(sample_dir)
+
+
+def save_fake_images(images, num):
+	num_int = 0
+	for i in images:
+		fake_fname = 'fake_images_'+str(num)+'_'+str(num_int)+'.png'
+		save_image(i, os.path.join(sample_dir, fake_fname))
+		num_int += 1
+		
+		fake_fname = 'fake_images_'+str(num)+'.png'
+		save_image(images, os.path.join(sample_dir, fake_fname))
+  
+
+
 # Training Loop
 
 # Lists to keep track of progress
@@ -162,9 +201,10 @@ iters = 0
 
 print("Starting Training Loop...")
 # For each epoch
+num = 0
 for epoch in range(num_epochs):
-    # For each batch in the dataloader
-    for i, data in enumerate(dataloader, 0):
+    # For each batch in the source dataloader
+    for i, data in enumerate(src_dataloader, 0):
 
         ############################
         # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
@@ -186,8 +226,15 @@ for epoch in range(num_epochs):
         ## Train with all-fake batch
         # Generate batch of latent vectors
         noise = torch.randn(b_size, nz, 1, 1, device=device)
+        
+        # Add some noise
+        noise_gauss(noise, device)
+        
         # Generate fake image batch with G
         fake = netG(noise)
+        print(fake.size())
+        noise_gauss(fake)
+        save_fake_images(fake, num)
         label.fill_(fake_label)
         # Classify all fake batch with D
         output = netD(fake.detach()).view(-1)
@@ -219,7 +266,7 @@ for epoch in range(num_epochs):
         # Output training stats
         if i % 50 == 0:
             print('[%d/%d][%d/%d]\tLoss_D: %.4f\tLoss_G: %.4f\tD(x): %.4f\tD(G(z)): %.4f / %.4f'
-                  % (epoch, num_epochs, i, len(dataloader),
+                  % (epoch, num_epochs, i, len(src_dataloader),
                      errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
 
         # Save Losses for plotting later
@@ -227,13 +274,20 @@ for epoch in range(num_epochs):
         D_losses.append(errD.item())
 
         # Check how the generator is doing by saving G's output on fixed_noise
-        if (iters % 500 == 0) or ((epoch == num_epochs-1) and (i == len(dataloader)-1)):
+        if (iters % 500 == 0) or ((epoch == num_epochs-1) and (i == len(src_dataloader)-1)):
             with torch.no_grad():
                 fake = netG(fixed_noise).detach().cpu()
             img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
 
         iters += 1
-        
+        num += 1
+
+
+
+# Save the model
+joblib.dump(netG, 'netG_train.pkl') 
+joblib.dump(netD, 'netD_train.pkl') 
+
 # LOSSES DISCRIMINATOR AND GENERATOR
 #TODO does it works??
 plt.figure(figsize=(10,5))
