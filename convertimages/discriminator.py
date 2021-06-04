@@ -1,13 +1,12 @@
 import torch.nn as nn
 
-# Number of channels in the training images. For color images this is 3
-nc = 3
+# nc = Number of channels in the training images. For color images this is 3. In MNIST = 1
 
 # Size of feature maps in discriminator
 ndf = 64
 
 class Discriminator(nn.Module):
-    def __init__(self, ngpu):
+    def __init__(self, ngpu, nc):
         super(Discriminator, self).__init__()
         self.ngpu = ngpu
         self.main = nn.Sequential(

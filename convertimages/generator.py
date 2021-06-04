@@ -1,7 +1,6 @@
 import torch.nn as nn
 
-# Number of channels in the training images. For color images this is 3
-nc = 3
+# nc = Number of channels in the training images. For color images this is 3
 
 # Size of z latent vector (i.e. size of generator input)
 nz = 100
@@ -10,7 +9,7 @@ nz = 100
 ngf = 64
 
 class Generator(nn.Module):
-    def __init__(self, ngpu):
+    def __init__(self, ngpu, nc):
         super(Generator, self).__init__()
         self.ngpu = ngpu
         self.main = nn.Sequential(
