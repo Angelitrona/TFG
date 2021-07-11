@@ -6,22 +6,47 @@ import torchvision.transforms as transforms
 import torch
 
 
-def noise_gauss(image, num):
-	row,col,ch= image.shape
+def noise_gauss(images, device):
+	num=0
+	for img in images:
+		ch,row,col= img.shape
+		mean = 0 # mean of the distribution
+		var = 0.6
+		sigma = var**0.9 #standard deviation of the distribution
+		gauss = np.random.normal(mean,sigma,(ch,row,col))
+		gauss = gauss.reshape(ch,row,col)
+		
+		
+		img_np = img.cpu().numpy() #data.cpu().numpy() #torch.numpy(img).cpu()
+		gaus_torch = torch.from_numpy(gauss).to(device)
+		result_np = img_np + gauss
+		result_torch = img + gaus_torch
+		
+		
+		img = result_torch
+		#name = 'noisy_gauss_dcgan'+str(num)+'.png'
+		#save_image(result_torch, os.path.join('./noise_dcgan', name), nrow=10)
+	#return images
+	
+	
+'''
+sample_dir = './noise_images'         
+if not os.path.exists(sample_dir):
+	os.makedirs(sample_dir)
+	
+	
+def noise_gauss_sv(image, num):
+	ch,row,col= image.shape
 	mean = 0 # mean of the distribution
 	var = 0.1
 	sigma = var**0.5 #standard deviation of the distribution
-	gauss = np.random.normal(mean,sigma,(row,col,ch))
-	gauss = gauss.reshape(row,col,ch)
+	gauss = np.random.normal(mean,sigma,(ch,row,col))
+	gauss = gauss.reshape(ch,row,col)
 	noisy = image + gauss
 	name = 'noisy_gauss_'+str(num)+'.png'
 	save_image(noisy, os.path.join(sample_dir, name), nrow=10)
 	return noisy
-                                     
-
-sample_dir = './noise_images'
-if not os.path.exists(sample_dir):
-	os.makedirs(sample_dir)
+                            
 
 
 # Root directory for dataset
@@ -53,11 +78,11 @@ dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
 for images, _ in dataloader:
 	i=0
 	for image in images:
-		noise_gauss(image,i)
+		noise_gauss_sv(image,i)
 		i+=1
 	break
  
- 
+'''
  
  
  
