@@ -48,7 +48,7 @@ import torchvision
 # functions to show an image
 
 # print images
-"""
+
 def imshow(img, lb):
     img = img / 2 + 0.5     # unnormalize
     npimg = img.numpy()
@@ -73,7 +73,7 @@ for i in range(12):
     if (labels[i] == 2 and not c2):
         c2 = True
         imshow(images[i], labels[i])
-"""     
+ 
 
 # Model creation
 import torch.nn as nn
@@ -143,11 +143,8 @@ model = StarWarsCnnModel()
 
 for images, labels in train_dl:
     print('images.shape:', images.shape)
-    #print("Antes")
     out = model(images)
-    #print("Dsp")
     print('out.shape:', out.shape)
-    #print('out[0]:', out[0])
     break
 
 
