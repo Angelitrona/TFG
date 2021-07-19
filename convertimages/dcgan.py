@@ -1,8 +1,5 @@
 from __future__ import print_function
-#%matplotlib inline
-import argparse
-import os
-import random
+import os,time, pickle, argparse, random, sys
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -17,342 +14,281 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from torchvision.utils import save_image
 from IPython.display import HTML
+
 from generator import Generator
 from discriminator import Discriminator
-from noise import noise_gauss
+from VGG19 import VGG19
+from noise import noise_gauss as noise
+from auxiliary_func import generate_data_ld
+from glob import glob
 
 import joblib #save the models
 
-# Set random seed for reproducibility
-manualSeed = 999
-#manualSeed = random.randint(1, 10000) # use if you want new results
-#print("Random Seed: ", manualSeed)
+
+manualSeed = 999 # Set random seed for reproducibility
 random.seed(manualSeed)
 torch.manual_seed(manualSeed)
 
-# Root directory for dataset
-srcroot = "./prueba"
-#tgtroot = './tgt'
 
-# Number of workers for dataloader
-workers = 2
+srcroot = './data/cartoon2D'#"/home/gines/Escritorio/TFG/data/cartoon2D" # Root directory for src_dataset
+tgtroot = './data/cartoon3D'#"/home/gines/Escritorio/TFG/data/cartoon3D" # Root directory for tgt_dataset
+vggroot = "./vgg19-train.pth"
 
-# Batch size during training
-batch_size = 128
+workers = 2 # Number of workers for dataloader
+batch_size = 2#128 # Batch size during training
+num_epochs = 4 # Number of training epochs
+num_epochs_pretrain = 250 #TODO CAMBIAR
+lr = 0.0002 # Learning rate for optimizers
+beta1 = 0.5 # Beta1 hyperparam for Adam optimizers
+ngpu = 1 # Number of GPUs available. Use 0 for CPU mode.
+lambda_loss = 10 # Lambda for content loss
+name = 'starwars_gan'
+in_size = 5 #TODO cambiar con el tamaño de la entrada!
 
-# Spatial size of training images. All images will be resized to this
-#   size using a transformer.
-image_size = 64
+# All training images will be resized to this size using a transformer.
+image_size_w = 480 
+image_size_h = 204
 
-# Number of channels in the training images. For color images this is 3
-nc = 3
+# Generator parameters
+in_nc_g = 3 # Input channel for generator (for color images=3)
+out_nc_g = 3 # Output channel for generator
+ngf = 64 # Size of feature maps in generator
+nblockl_layer = 8 #Number of resnet block layer for generator
 
-# Size of z latent vector (i.e. size of generator input)
-nz = 100
+# Discriminator parameters
+in_nc_d = 3 # Input channel for discriminator
+out_nc_d = 1 # Output channel for discriminator
+ndf = 32 # Size of feature maps in discriminator
 
-# Size of feature maps in generator
-ngf = 64
-
-# Size of feature maps in discriminator
-ndf = 64
-
-# Number of training epochs
-num_epochs = 5
-
-# Learning rate for optimizers
-lr = 0.0002
-
-# Beta1 hyperparam for Adam optimizers
-beta1 = 0.5
-
-# Number of GPUs available. Use 0 for CPU mode.
-ngpu = 1
-
-
-
-# Create the source dataset. We use an image folder
-src_dataset = dset.ImageFolder(root=srcroot,
-                           transform=transforms.Compose([
-                               transforms.Resize(image_size),
-                               transforms.CenterCrop(image_size),
-                               transforms.ToTensor(),
-                               transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                           ]))
-# Create the source dataloader
-src_dataloader = torch.utils.data.DataLoader(src_dataset, batch_size=batch_size,
-                                         shuffle=True, num_workers=workers)
-  
-  
-'''                                       
-# Create the target dataset. We use an image folder
-tgt_dataset = dset.ImageFolder(root=tgtroot,
-                           transform=transforms.Compose([
-                               transforms.Resize(image_size),
-                               transforms.CenterCrop(image_size),
-                               transforms.ToTensor(),
-                               transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                           ]))
-# Create the target dataloader
-tgt_dataloader = torch.utils.data.DataLoader(tgt_dataset, batch_size=batch_size,
-                                         shuffle=True, num_workers=workers)
-'''                                        
-                                         
 
 # Decide which device we want to run on
 device = torch.device("cuda" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
-#print("Device: ",device)
-  
-# Plot some training images
-real_batch = next(iter(src_dataloader))
-plt.figure(figsize=(8,8))
-plt.axis("off")
-plt.title("Training Images")
-plt.imshow(np.transpose(vutils.make_grid(real_batch[0].to(device)[:64], padding=2, normalize=True).cpu(),(1,2,0)))
+print("Device: ",device)
 
 
-def imshow(img, lb):
-    img = img / 2 + 0.5     # unnormalize
-    npimg = img.numpy()
-    plt.imshow(np.transpose(npimg, (1, 2, 0)))
-    plt.title(classes[lb])
-    plt.show()
+# Results save path
+if not os.path.isdir(os.path.join(name + '_results', 'Reconstruction')):
+    os.makedirs(os.path.join(name + '_results', 'Reconstruction'))
+if not os.path.isdir(os.path.join(name + '_results', 'Transfer')):
+    os.makedirs(os.path.join(name + '_results', 'Transfer'))
 
-# IMPLEMENTATION
-# custom weights initialization called on netG and netD
-def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
-        nn.init.normal_(m.weight.data, 0.0, 0.02)
-    elif classname.find('BatchNorm') != -1:
-        nn.init.normal_(m.weight.data, 1.0, 0.02)
-        nn.init.constant_(m.bias.data, 0)
+
+# Dataloaders
+transform = transforms.Compose([transforms.Resize((image_size_h, image_size_w)),  transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]) #transforms.CenterCrop(image_size),
+
+train_src_dataloader = generate_data_ld(srcroot, 'train', transform, batch_size, shuffle=True, drop_last=True)
+
+train_tgt_dataloader = generate_data_ld(tgtroot, 'train', transform, batch_size, shuffle=True, drop_last=True)
+
+test_src_dataloader = generate_data_ld(srcroot, 'test', transform, 1, shuffle=True, drop_last=True)
+
+
 
 # GENERATOR
-netG = Generator(ngpu,nc).to(device)
+netG = Generator(in_nc_g, out_nc_g, ngf, nblockl_layer).to(device) 
 
-# Handle multi-gpu if desired
-if (device.type == 'cuda') and (ngpu > 1):
+already_trained_g = False
+if len(sys.argv)>1:
+    already_trained_g = True
+    netG.load_state_dict(torch.load(sys.argv[1]))
+    
+if (device.type == 'cuda') and (ngpu > 1): # Handle multi-gpu if desired
     netG = nn.DataParallel(netG, list(range(ngpu)))
-
-# Apply the weights_init function to randomly initialize all weights
-#  to mean=0, stdev=0.2.
-netG.apply(weights_init)
-
-# Print the model
-#print(netG)
+#print(netG) # Print the model
+netG.train()
 
 # DISCRIMINATOR
-netD = Discriminator(ngpu,nc).to(device)
+netD = Discriminator(in_nc_d, out_nc_d, ndf).to(device)
 
-# Handle multi-gpu if desired
-if (device.type == 'cuda') and (ngpu > 1):
+if (device.type == 'cuda') and (ngpu > 1): # Handle multi-gpu if desired
     netD = nn.DataParallel(netD, list(range(ngpu)))
+#print(netD) # Print the model
+netD.train()
 
-# Apply the weights_init function to randomly initialize all weights
-#  to mean=0, stdev=0.2.
-netD.apply(weights_init)
+# VGG19
+vgg = VGG19(init_weights=vggroot, feature_mode=True).to(device)
 
-# Print the model
-#print(netD)
-
-
-# Initialize BCELoss function
-criterion = nn.BCELoss()
-
-# Create batch of latent vectors that we will use to visualize
-#  the progression of the generator
-fixed_noise = torch.randn(64, nz, 1, 1, device=device)
-
-# Establish convention for real and fake labels during training
-real_label = 1.
-fake_label = 0.
+# Initialize BCELoss, L1Loss function
+bce_loss = nn.BCELoss().to(device)
+l1_loss = nn.L1Loss().to(device)
 
 # Setup Adam optimizers for both G and D
 optimizerD = optim.Adam(netD.parameters(), lr=lr, betas=(beta1, 0.999))
 optimizerG = optim.Adam(netG.parameters(), lr=lr, betas=(beta1, 0.999))
 
+G_scheduler = optim.lr_scheduler.MultiStepLR(optimizer=optimizerG, milestones=[num_epochs // 2, num_epochs // 4 * 3], gamma=0.1)
+D_scheduler = optim.lr_scheduler.MultiStepLR(optimizer=optimizerD, milestones=[num_epochs // 2, num_epochs // 4 * 3], gamma=0.1)
 
-#TRAINING
-# Save image function
-sample_dir = 'images_dcgan'
-if not os.path.exists(sample_dir):
-    os.makedirs(sample_dir)
+# PRE-TRAINING
+pre_train_hist = {}
+pre_train_hist['Recon_loss'] = []
+pre_train_hist['per_epoch_time'] = []
+pre_train_hist['total_time'] = []
+
+""" Pre-train reconstruction """
+if not already_trained_g:
+    print('Pre-training start!')
+    start_time = time.time()
+    for epoch in range(num_epochs_pretrain):
+        epoch_start_time = time.time()
+        Recon_losses = []
+        for x, _ in train_src_dataloader:
+            x = x.to(device)
+
+            # train generator G
+            optimizerG.zero_grad()
+
+            x_feature = vgg((x + 1) / 2)
+            G_, _ = netG(x)
+            G_feature = vgg((G_ + 1) / 2)
+            Recon_loss = 10 * l1_loss(G_feature, x_feature.detach())
+            Recon_losses.append(Recon_loss.item())
+            pre_train_hist['Recon_loss'].append(Recon_loss.item())
+
+            Recon_loss.backward()
+            optimizerG.step()
+           
+        per_epoch_time = time.time() - epoch_start_time
+        pre_train_hist['per_epoch_time'].append(per_epoch_time)
+        print('[%d/%d] - time: %.2f, Recon loss: %.3f' % ((epoch + 1), num_epochs_pretrain, per_epoch_time, torch.mean(torch.FloatTensor(Recon_losses))))
+
+    total_time = time.time() - start_time
+    pre_train_hist['total_time'].append(total_time)
+    with open(os.path.join(name + '_results',  'pre_train_hist.pkl'), 'wb') as f:
+        pickle.dump(pre_train_hist, f)
+
+    with torch.no_grad():
+        netG.eval()
+        for n, (x, _) in enumerate(train_src_dataloader):
+            x = x.to(device)
+            G_recon, _ = netG(x)
+            result = torch.cat((x[0], G_recon[0]), 2)
+            path = os.path.join(name + '_results', 'Reconstruction', name + '_train_recon_' + str(n + 1) + '.png')
+            plt.imsave(path, (result.cpu().numpy().transpose(1, 2, 0) + 1) / 2)
+            if n == 4:
+                break
+
+        for n, (x, _) in enumerate(test_src_dataloader):
+            x = x.to(device)
+            G_recon, _ = netG(x)
+            result = torch.cat((x[0], G_recon[0]), 2)
+            path = os.path.join(name + '_results', 'Reconstruction', name + '_test_recon_' + str(n + 1) + '.png')
+            plt.imsave(path, (result.cpu().numpy().transpose(1, 2, 0) + 1) / 2)
+            if n == 4:
+                break
+else:
+    print('Load the latest generator model, no need to pre-train')
 
 
-def save_fake_images(images, num):
-	num_int = 0
-	for i in images:
-		fake_fname = 'fake_images_'+str(num)+'_'+str(num_int)+'.png'
-		save_image(i, os.path.join(sample_dir, fake_fname))
-		num_int += 1
-		
-		fake_fname = 'fake_images_'+str(num)+'.png'
-		save_image(images, os.path.join(sample_dir, fake_fname))
-  
+# TRAINING LOOP
+train_hist = {}
+train_hist['Disc_loss'] = []
+train_hist['Gen_loss'] = []
+train_hist['Con_loss'] = []
+train_hist['per_epoch_time'] = []
+train_hist['total_time'] = []
+print('Training start!')
+start_time = time.time()
 
+# Establish convention for real and fake labels during training
+real_label = 1.
+fake_label = 0.
+real = torch.ones(batch_size, 1, in_size // 4, in_size // 4).to(device)
+real = torch.ones(batch_size, 1, 51, 2).to(device)#TODO quitqra linea pq??
+real_f = torch.ones(batch_size, 1, 51, 120).to(device)#TODO quitqra linea pq??
 
-# Training Loop
-
-# Lists to keep track of progress
-img_list = []
-G_losses = []
-D_losses = []
-iters = 0
-
-print("Starting Training Loop...")
-# For each epoch
-num = 0
+fake = torch.zeros(batch_size, 1, in_size // 4, in_size // 4).to(device)
+fake = torch.zeros(batch_size, 1, 51, 120).to(device)#TODO quitqra linea
 for epoch in range(num_epochs):
-    # For each batch in the source dataloader
-    for i, data in enumerate(src_dataloader, 0):
+    epoch_start_time = time.time()
+    netG.train()
+    G_scheduler.step()
+    D_scheduler.step()
+    Disc_losses = []
+    Gen_losses = []
+    Con_losses = []
+    for (x, _), (y, _) in zip(train_src_dataloader, train_tgt_dataloader):
+        e = y[:, :, :, in_size:]
+        y = y[:, :, :, :in_size]
+        x, y, e = x.to(device), y.to(device), e.to(device)
 
-        ############################
-        # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
-        ###########################
-        ## Train with all-real batch
-        netD.zero_grad()
-        # Format batch
-        real_cpu = data[0].to(device)
-        b_size = real_cpu.size(0)
-        label = torch.full((b_size,), real_label, dtype=torch.float, device=device)
-        # Forward pass real batch through D
-        output = netD(real_cpu).view(-1)
-        # Calculate loss on all-real batch
-        errD_real = criterion(output, label)
-        # Calculate gradients for D in backward pass
-        errD_real.backward()
-        D_x = output.mean().item()
+        # train D
+        optimizerD.zero_grad()
 
-        ## Train with all-fake batch
-        # Generate batch of latent vectors
-        noise = torch.randn(b_size, nz, 1, 1, device=device)
-        
-        # Add some noise
-        noise_gauss(noise, device)
-        
-        # Generate fake image batch with G
-        fake = netG(noise)
-        print(fake.size())
-        noise_gauss(fake)
-        save_fake_images(fake, num)
-        label.fill_(fake_label)
-        # Classify all fake batch with D
-        output = netD(fake.detach()).view(-1)
-        # Calculate D's loss on the all-fake batch
-        errD_fake = criterion(output, label)
-        # Calculate the gradients for this batch, accumulated (summed) with previous gradients
-        errD_fake.backward()
-        D_G_z1 = output.mean().item()
-        # Compute error of D as sum over the fake and the real batches
-        errD = errD_real + errD_fake
-        # Update D
+        D_real = netD(y)
+        D_real_loss = bce_loss(D_real, real)
+
+        G_, dec= netG(x)
+        print(dec.size(), ' - ', G_.size())
+        D_fake = netD(G_)
+        D_fake_loss = bce_loss(D_fake, fake) #min
+
+        Disc_loss = D_real_loss + D_fake_loss  #TODO se pueden aplicar pesos en las losses
+        Disc_losses.append(Disc_loss.item())
+        train_hist['Disc_loss'].append(Disc_loss.item())
+
+        Disc_loss.backward()
         optimizerD.step()
 
-        ############################
-        # (2) Update G network: maximize log(D(G(z)))
-        ###########################
-        netG.zero_grad()
-        label.fill_(real_label)  # fake labels are real for generator cost
-        # Since we just updated D, perform another forward pass of all-fake batch through D
-        output = netD(fake).view(-1)
-        # Calculate G's loss based on this output
-        errG = criterion(output, label)
-        # Calculate gradients for G
-        errG.backward()
-        D_G_z2 = output.mean().item()
-        # Update G
+        # train G
+        optimizerG.zero_grad()
+
+        G_, _ = netG(x)
+        D_fake = netD(G_)
+        D_fake_loss = bce_loss(D_fake, real_f) #max
+
+        x_feature = vgg((x + 1) / 2)
+        G_feature = vgg((G_ + 1) / 2)
+        Con_loss = lambda_loss * l1_loss(G_feature, x_feature.detach())
+
+        Gen_loss = D_fake_loss + Con_loss
+        Gen_losses.append(D_fake_loss.item())
+        train_hist['Gen_loss'].append(D_fake_loss.item())
+        Con_losses.append(Con_loss.item())
+        train_hist['Con_loss'].append(Con_loss.item())
+
+        Gen_loss.backward()
         optimizerG.step()
 
-        # Output training stats
-        if i % 50 == 0:
-            print('[%d/%d][%d/%d]\tLoss_D: %.4f\tLoss_G: %.4f\tD(x): %.4f\tD(G(z)): %.4f / %.4f'
-                  % (epoch, num_epochs, i, len(src_dataloader),
-                     errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
 
-        # Save Losses for plotting later
-        G_losses.append(errG.item())
-        D_losses.append(errD.item())
+    per_epoch_time = time.time() - epoch_start_time
+    train_hist['per_epoch_time'].append(per_epoch_time)
+    print(
+    '[%d/%d] - time: %.2f, Disc loss: %.3f, Gen loss: %.3f, Con loss: %.3f' % ((epoch + 1), num_epochs, per_epoch_time, torch.mean(torch.FloatTensor(Disc_losses)),
+        torch.mean(torch.FloatTensor(Gen_losses)), torch.mean(torch.FloatTensor(Con_losses))))
 
-        # Check how the generator is doing by saving G's output on fixed_noise
-        if (iters % 500 == 0) or ((epoch == num_epochs-1) and (i == len(src_dataloader)-1)):
-            with torch.no_grad():
-                fake = netG(fixed_noise).detach().cpu()
-            img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
+    if epoch % 2 == 1 or epoch == num_epochs- 1:
+        with torch.no_grad():
+            netG.eval()
+            for n, (x, _) in enumerate(train_src_dataloader):
+                x = x.to(device)
+                G_recon, _ = netG(x)
+                result = torch.cat((x[0], G_recon[0]), 2)
+                path = os.path.join(name + '_results', 'Transfer', str(epoch+1) + '_epoch_' + name + '_train_' + str(n + 1) + '.png')
+                plt.imsave(path, (result.cpu().numpy().transpose(1, 2, 0) + 1) / 2)
+                if n == 4:
+                    break
 
-        iters += 1
-        num += 1
+            for n, (x, _) in enumerate(test_src_dataloader):
+                x = x.to(device)
+                G_recon, _ = netG(x)
+                result = torch.cat((x[0], G_recon[0]), 2)
+                path = os.path.join(name + '_results', 'Transfer', str(epoch+1) + '_epoch_' + name + '_test_' + str(n + 1) + '.png')
+                plt.imsave(path, (result.cpu().numpy().transpose(1, 2, 0) + 1) / 2)
+                if n == 4:
+                    break
 
+            torch.save(netG.state_dict(), os.path.join(name + '_results', 'generator_latest.pkl'))
+            torch.save(netD.state_dict(), os.path.join(name + '_results', 'discriminator_latest.pkl'))
 
+total_time = time.time() - start_time
+train_hist['total_time'].append(total_time)
 
-# Save the model
-joblib.dump(netG, 'netG_train.pkl') 
-joblib.dump(netD, 'netD_train.pkl') 
+print("Avg one epoch time: %.2f, total %d epochs time: %.2f" % (torch.mean(torch.FloatTensor(train_hist['per_epoch_time'])), num_epochs, total_time))
+print("Training finish!... save training results")
 
-# LOSSES DISCRIMINATOR AND GENERATOR
-#TODO does it works??
-plt.figure(figsize=(10,5))
-plt.title("Generator and Discriminator Loss During Training")
-plt.plot(G_losses,label="G")
-plt.plot(D_losses,label="D")
-plt.xlabel("iterations")
-plt.ylabel("Loss")
-plt.legend()
-plt.show()
-plt.show()
-
-
-
-#Visualize the trainig progression of the generator
-fig = plt.figure(figsize=(8,8))
-plt.axis("off")
-ims = [[plt.imshow(np.transpose(i,(1,2,0)), animated=True)] for i in img_list]
-ani = animation.ArtistAnimation(fig, ims, interval=1000, repeat_delay=1000, blit=True)
-#TODO Module HTML i8s not import
-HTML(ani.to_jshtml())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+torch.save(netG.state_dict(), os.path.join(name + '_results',  'generator_param.pkl'))
+torch.save(netD.state_dict(), os.path.join(name + '_results',  'discriminator_param.pkl'))
+with open(os.path.join(name + '_results',  'train_hist.pkl'), 'wb') as f:
+    pickle.dump(train_hist, f)
 
