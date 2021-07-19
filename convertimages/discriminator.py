@@ -1,34 +1,38 @@
+import auxiliary_func
 import torch.nn as nn
 
-# nc = Number of channels in the training images. For color images this is 3. In MNIST = 1
-
-# Size of feature maps in discriminator
-ndf = 64
-
 class Discriminator(nn.Module):
-    def __init__(self, ngpu, nc):
+    # initializers
+    def __init__(self, in_nc, out_nc, nf=32):
         super(Discriminator, self).__init__()
-        self.ngpu = ngpu
-        self.main = nn.Sequential(
-            # input is (nc) x 64 x 64
-            nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
-            nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf) x 32 x 32
-            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ndf * 2),
-            nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf*2) x 16 x 16
-            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ndf * 4),
-            nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf*4) x 8 x 8
-            nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ndf * 8),
-            nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf*8) x 4 x 4
-            nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False),
-            nn.Sigmoid()
+        self.input_nc = in_nc
+        self.output_nc = out_nc
+        self.nf = nf
+        self.convs = nn.Sequential(
+            nn.Conv2d(in_nc, nf, 3, 1, 1),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(nf, nf * 2, 3, 2, 1),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(nf * 2, nf * 4, 3, 1, 1),
+            nn.InstanceNorm2d(nf * 4),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(nf * 4, nf * 4, 3, 2, 1),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(nf * 4, nf * 8, 3, 1, 1),
+            nn.InstanceNorm2d(nf * 8),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(nf * 8, nf * 8, 3, 1, 1),
+            nn.InstanceNorm2d(nf * 8),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(nf * 8, out_nc, 3, 1, 1),
+            nn.Sigmoid(),
         )
 
+        auxiliary_func.initialize_weights(self)
+
+    # forward method
     def forward(self, input):
-        return self.main(input)
+        # input = torch.cat((input1, input2), 1)
+        output = self.convs(input)
+
+        return output
